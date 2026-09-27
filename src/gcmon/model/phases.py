@@ -1,5 +1,5 @@
 """The phases of a collection: which records carry each, where it runs,
-and what it annotates."""
+and what it annotates; and the fields that annotate the pause alone."""
 
 from collections.abc import Mapping
 from functools import partial
@@ -31,6 +31,7 @@ from .names import (
     TS_CLEAR_WEAKREFS_STOP,
     TS_DEDUCE_UNREACHABLE_START,
     TS_DELETE_GARBAGE_START,
+    TS_FILL_INCREMENT_START,
     TS_FINALIZE_GARBAGE_STOP,
     TS_HANDLE_RESURRECTED_STOP,
     TS_HANDLE_WEAKREF_CALLBACKS_START,
@@ -38,7 +39,7 @@ from .names import (
     TS_START,
     UNCOLLECTABLE,
     PerGeneration,
-    Phase,
+    PhaseName,
     counter_display_name,
 )
 from .protocol import (
@@ -48,50 +49,67 @@ from .protocol import (
 from .trace_event import EventArgs
 
 __all__ = [
-    "PAUSE_ROW",
-    "PHASE_ROWS",
-    "SUB_PHASE_ROWS",
-    "ClearWeakrefsData",
-    "DeduceUnreachableData",
-    "DeleteGarbageData",
-    "FinalizeGarbageData",
-    "HandleResurrectedData",
-    "HandleWeakrefsData",
-    "IncrementalData",
-    "MarkAliveData",
-    "PhaseRow",
-    "SubPhaseRow",
-    "sub_phase_rows",
+    "PAUSE_FIELDS",
+    "PHASES",
+    "SUB_PHASES",
+    "ClearWeakrefsSubPhase",
+    "DeduceUnreachableSubPhase",
+    "DeleteGarbageSubPhase",
+    "FillIncrementSubPhase",
+    "FinalizeGarbageSubPhase",
+    "HandleResurrectedSubPhase",
+    "HandleWeakrefsSubPhase",
+    "IncrementSizeField",
+    "MarkAliveSubPhase",
+    "PauseField",
+    "PausePhase",
+    "Phase",
+    "SubPhase",
+    "sub_phases",
+    "sub_phases_and_fields",
 ]
 
 
-class PhaseRow(Protocol):
+class Phase(Protocol):
     """One phase: which records carry it, where it runs, and what it
     annotates. *item* in `bounds` and `args` is one `check` accepted."""
 
-    phase: ClassVar[Phase]
+    name: ClassVar[PhaseName]
 
     @staticmethod
     def check(item: object) -> bool: ...
 
     @staticmethod
-    def bounds(item: Any) -> tuple[int, int]: ...
+    def bounds(gen: int, item: Any) -> tuple[int, int]: ...
 
     @staticmethod
-    def args(gen: int, item: Any) -> EventArgs: ...
+    def args(gen: int, iid: int, item: Any) -> EventArgs: ...
 
 
-class SubPhaseRow(PhaseRow, Protocol):
+class SubPhase(Phase, Protocol):
     """A phase inside the pause. `Info` names the fields `bounds` and `args`
     read."""
 
     Info: ClassVar[type]
 
 
-class PauseData:
+class PauseField(Protocol):
+    """Fields with no span of their own: which records carry them, and what
+    they annotate the pause with. `Info` names the fields `args` reads."""
+
+    Info: ClassVar[type]
+
+    @staticmethod
+    def check(item: object) -> bool: ...
+
+    @staticmethod
+    def args(gen: int, iid: int, item: Any) -> EventArgs: ...
+
+
+class PausePhase:
     type Info = TGCStatsInfo
 
-    phase: ClassVar[Phase] = PAUSE
+    name: ClassVar[PhaseName] = PAUSE
 
     counter_metrics: ClassVar = (COLLECTED, CANDIDATES, DURATION, UNCOLLECTABLE)
     counter_names: ClassVar[Mapping[str, PerGeneration[str]]] = {
@@ -104,14 +122,14 @@ class PauseData:
         return is_gc_stats(item) and getattr(item, TS_START, None) is not None
 
     @staticmethod
-    def bounds(item: Info) -> tuple[int, int]:
+    def bounds(gen: int, item: Info) -> tuple[int, int]:
         return item.ts_start, item.ts_stop
 
     @staticmethod
-    def args(gen: int, item: Info) -> EventArgs:
+    def args(gen: int, iid: int, item: Info) -> EventArgs:
         return {
-            GENERATION: item.gen,
-            IID: item.iid,
+            GENERATION: gen,
+            IID: iid,
             COLLECTIONS: item.collections,
             COLLECTED: item.collected,
             UNCOLLECTABLE: item.uncollectable,
@@ -134,114 +152,126 @@ class PauseData:
         return counters
 
 
-class MarkAliveData:
+class MarkAliveSubPhase:
     class _Info(Protocol):
-        gen: int
-        iid: int
         alive_size: int
         ts_mark_alive_start: int
         ts_mark_alive_stop: int
 
     Info: ClassVar[type] = _Info
-    phase: ClassVar[Phase] = MARK_ALIVE
+    name: ClassVar[PhaseName] = MARK_ALIVE
 
     @staticmethod
     def check(item: object) -> TypeGuard[_Info]:
         return getattr(item, ALIVE_SIZE, None) is not None
 
     @staticmethod
-    def bounds(item: _Info) -> tuple[int, int]:
+    def bounds(gen: int, item: _Info) -> tuple[int, int]:
         # Mark Alive does not run at generation 0.
-        if item.gen == 0:
+        if gen == 0:
             return 0, 0
         return item.ts_mark_alive_start, item.ts_mark_alive_stop
 
     @staticmethod
-    def args(gen: int, item: _Info) -> EventArgs:
-        return {GENERATION: gen, IID: item.iid, ALIVE_SIZE: item.alive_size}
+    def args(gen: int, iid: int, item: _Info) -> EventArgs:
+        return {GENERATION: gen, IID: iid, ALIVE_SIZE: item.alive_size}
 
 
-class IncrementalData:
+class IncrementSizeField:
+    """The size of the increment Fill Increment fills."""
+
     class _Info(Protocol):
-        gen: int
-        iid: int
         increment_size: int
-        ts_fill_increment_start: int
-        ts_fill_increment_stop: int
 
     Info: ClassVar[type] = _Info
-    phase: ClassVar[Phase] = FILL_INCREMENT
 
     @staticmethod
     def check(item: object) -> TypeGuard[_Info]:
         return getattr(item, INCREMENT_SIZE, None) is not None
 
     @staticmethod
-    def bounds(item: _Info) -> tuple[int, int]:
+    def args(gen: int, iid: int, item: _Info) -> EventArgs:
+        # Generation 2 fills no increment.
+        if gen == 2:
+            return {}
+        return {GENERATION: gen, IID: iid, INCREMENT_SIZE: item.increment_size}
+
+
+class FillIncrementSubPhase:
+    class _Info(Protocol):
+        ts_fill_increment_start: int
+        ts_fill_increment_stop: int
+
+    Info: ClassVar[type] = _Info
+    name: ClassVar[PhaseName] = FILL_INCREMENT
+
+    @staticmethod
+    def check(item: object) -> TypeGuard[_Info]:
+        return getattr(item, TS_FILL_INCREMENT_START, None) is not None
+
+    @staticmethod
+    def bounds(gen: int, item: _Info) -> tuple[int, int]:
         # Fill Increment does not run at generation 2.
-        if item.gen == 2:
+        if gen == 2:
             return 0, 0
         return item.ts_fill_increment_start, item.ts_fill_increment_stop
 
     @staticmethod
-    def args(gen: int, item: _Info) -> EventArgs:
-        return {GENERATION: gen, IID: item.iid, INCREMENT_SIZE: item.increment_size}
+    def args(gen: int, iid: int, item: _Info) -> EventArgs:
+        return {GENERATION: gen, IID: iid}
 
 
-class DeduceUnreachableData:
+class DeduceUnreachableSubPhase:
     class _Info(Protocol):
-        iid: int
         candidates: int
         ts_deduce_unreachable_start: int
         ts_deduce_unreachable_stop: int
 
     Info: ClassVar[type] = _Info
-    phase: ClassVar[Phase] = DEDUCE_UNREACHABLE
+    name: ClassVar[PhaseName] = DEDUCE_UNREACHABLE
 
     @staticmethod
     def check(item: object) -> TypeGuard[_Info]:
         return getattr(item, TS_DEDUCE_UNREACHABLE_START, None) is not None
 
     @staticmethod
-    def bounds(item: _Info) -> tuple[int, int]:
+    def bounds(gen: int, item: _Info) -> tuple[int, int]:
         return item.ts_deduce_unreachable_start, item.ts_deduce_unreachable_stop
 
     @staticmethod
-    def args(gen: int, item: _Info) -> EventArgs:
-        return {GENERATION: gen, IID: item.iid, CANDIDATES: item.candidates}
+    def args(gen: int, iid: int, item: _Info) -> EventArgs:
+        return {GENERATION: gen, IID: iid, CANDIDATES: item.candidates}
 
 
-class HandleWeakrefsData:
+class HandleWeakrefsSubPhase:
     class _Info(Protocol):
-        iid: int
         ts_handle_weakref_callbacks_start: int
         ts_handle_weakref_callbacks_stop: int
 
     Info: ClassVar[type] = _Info
-    phase: ClassVar[Phase] = HANDLE_WEAKREFS
+    name: ClassVar[PhaseName] = HANDLE_WEAKREFS
 
     @staticmethod
     def check(item: object) -> TypeGuard[_Info]:
         return getattr(item, TS_HANDLE_WEAKREF_CALLBACKS_START, None) is not None
 
     @staticmethod
-    def bounds(item: _Info) -> tuple[int, int]:
+    def bounds(gen: int, item: _Info) -> tuple[int, int]:
         return item.ts_handle_weakref_callbacks_start, item.ts_handle_weakref_callbacks_stop
 
     @staticmethod
-    def args(gen: int, item: _Info) -> EventArgs:
-        return {GENERATION: gen, IID: item.iid}
+    def args(gen: int, iid: int, item: _Info) -> EventArgs:
+        return {GENERATION: gen, IID: iid}
 
 
-class FinalizeGarbageData:
+class FinalizeGarbageSubPhase:
     class _Info(Protocol):
-        iid: int
         finalized_garbage_count: int
         ts_handle_weakref_callbacks_stop: int
         ts_finalize_garbage_stop: int
 
     Info: ClassVar[type] = _Info
-    phase: ClassVar[Phase] = FINALIZE_GARBAGE
+    name: ClassVar[PhaseName] = FINALIZE_GARBAGE
 
     @staticmethod
     def check(item: object) -> TypeGuard[_Info]:
@@ -251,22 +281,21 @@ class FinalizeGarbageData:
         )
 
     @staticmethod
-    def bounds(item: _Info) -> tuple[int, int]:
+    def bounds(gen: int, item: _Info) -> tuple[int, int]:
         return item.ts_handle_weakref_callbacks_stop, item.ts_finalize_garbage_stop
 
     @staticmethod
-    def args(gen: int, item: _Info) -> EventArgs:
-        return {GENERATION: gen, IID: item.iid, FINALIZED_GARBAGE_COUNT: item.finalized_garbage_count}
+    def args(gen: int, iid: int, item: _Info) -> EventArgs:
+        return {GENERATION: gen, IID: iid, FINALIZED_GARBAGE_COUNT: item.finalized_garbage_count}
 
 
-class HandleResurrectedData:
+class HandleResurrectedSubPhase:
     class _Info(Protocol):
-        iid: int
         ts_finalize_garbage_stop: int
         ts_handle_resurrected_stop: int
 
     Info: ClassVar[type] = _Info
-    phase: ClassVar[Phase] = HANDLE_RESURRECTED
+    name: ClassVar[PhaseName] = HANDLE_RESURRECTED
 
     @staticmethod
     def check(item: object) -> TypeGuard[_Info]:
@@ -276,23 +305,22 @@ class HandleResurrectedData:
         )
 
     @staticmethod
-    def bounds(item: _Info) -> tuple[int, int]:
+    def bounds(gen: int, item: _Info) -> tuple[int, int]:
         return item.ts_finalize_garbage_stop, item.ts_handle_resurrected_stop
 
     @staticmethod
-    def args(gen: int, item: _Info) -> EventArgs:
-        return {GENERATION: gen, IID: item.iid}
+    def args(gen: int, iid: int, item: _Info) -> EventArgs:
+        return {GENERATION: gen, IID: iid}
 
 
-class ClearWeakrefsData:
+class ClearWeakrefsSubPhase:
     class _Info(Protocol):
-        iid: int
         clear_weakrefs_count: int
         ts_handle_resurrected_stop: int
         ts_clear_weakrefs_stop: int
 
     Info: ClassVar[type] = _Info
-    phase: ClassVar[Phase] = CLEAR_WEAKREFS
+    name: ClassVar[PhaseName] = CLEAR_WEAKREFS
 
     @staticmethod
     def check(item: object) -> TypeGuard[_Info]:
@@ -302,63 +330,65 @@ class ClearWeakrefsData:
         )
 
     @staticmethod
-    def bounds(item: _Info) -> tuple[int, int]:
+    def bounds(gen: int, item: _Info) -> tuple[int, int]:
         return item.ts_handle_resurrected_stop, item.ts_clear_weakrefs_stop
 
     @staticmethod
-    def args(gen: int, item: _Info) -> EventArgs:
-        return {GENERATION: gen, IID: item.iid, CLEAR_WEAKREFS_COUNT: item.clear_weakrefs_count}
+    def args(gen: int, iid: int, item: _Info) -> EventArgs:
+        return {GENERATION: gen, IID: iid, CLEAR_WEAKREFS_COUNT: item.clear_weakrefs_count}
 
 
-class DeleteGarbageData:
+class DeleteGarbageSubPhase:
     class _Info(Protocol):
-        iid: int
         deleted_garbage_count: int
         ts_delete_garbage_start: int
         ts_delete_garbage_stop: int
 
     Info: ClassVar[type] = _Info
-    phase: ClassVar[Phase] = DELETE_GARBAGE
+    name: ClassVar[PhaseName] = DELETE_GARBAGE
 
     @staticmethod
     def check(item: object) -> TypeGuard[_Info]:
         return getattr(item, TS_DELETE_GARBAGE_START, None) is not None
 
     @staticmethod
-    def bounds(item: _Info) -> tuple[int, int]:
+    def bounds(gen: int, item: _Info) -> tuple[int, int]:
         return item.ts_delete_garbage_start, item.ts_delete_garbage_stop
 
     @staticmethod
-    def args(gen: int, item: _Info) -> EventArgs:
-        return {GENERATION: gen, IID: item.iid, DELETED_GARBAGE_COUNT: item.deleted_garbage_count}
+    def args(gen: int, iid: int, item: _Info) -> EventArgs:
+        return {GENERATION: gen, IID: iid, DELETED_GARBAGE_COUNT: item.deleted_garbage_count}
 
-
-PAUSE_ROW: Final = PauseData
 
 # In the order the collector runs them, which is the order they are drawn in.
-SUB_PHASE_ROWS: Final[tuple[type[SubPhaseRow], ...]] = (
-    MarkAliveData,
-    IncrementalData,
-    DeduceUnreachableData,
-    HandleWeakrefsData,
-    FinalizeGarbageData,
-    HandleResurrectedData,
-    ClearWeakrefsData,
-    DeleteGarbageData,
+SUB_PHASES: Final[tuple[type[SubPhase], ...]] = (
+    MarkAliveSubPhase,
+    FillIncrementSubPhase,
+    DeduceUnreachableSubPhase,
+    HandleWeakrefsSubPhase,
+    FinalizeGarbageSubPhase,
+    HandleResurrectedSubPhase,
+    ClearWeakrefsSubPhase,
+    DeleteGarbageSubPhase,
 )
 
 # The pause, then its sub-phases.
-PHASE_ROWS: Final[tuple[type[PhaseRow], ...]] = (PAUSE_ROW, *SUB_PHASE_ROWS)
+PHASES: Final[tuple[type[Phase], ...]] = (PausePhase, *SUB_PHASES)
 
-# Per struct-sequence type: the sub-phase rows its records carry.
-_SUB_PHASE_ROWS: dict[type, tuple[type[PhaseRow], ...]] = {}
+PAUSE_FIELDS: Final[tuple[type[PauseField], ...]] = (IncrementSizeField,)
 
-# The fields the sub-phase rows' `check`s read. A msgspec record holds
-# `None` for any it lacks, so which of these it holds decides which rows it
-# carries.
+type _SubPhasesAndFields = tuple[tuple[type[SubPhase], ...], tuple[type[PauseField], ...]]
+
+# Per struct-sequence type: the sub-phases and pause fields its records carry.
+_BY_TYPE: dict[type, _SubPhasesAndFields] = {}
+
+# The fields the `check`s read. A msgspec record holds `None` for any it
+# lacks, so which of these it holds decides which sub-phases and pause fields
+# it carries.
 _CHECKED_FIELDS: Final = attrgetter(
     ALIVE_SIZE,
     INCREMENT_SIZE,
+    TS_FILL_INCREMENT_START,
     TS_DEDUCE_UNREACHABLE_START,
     TS_HANDLE_WEAKREF_CALLBACKS_START,
     TS_HANDLE_WEAKREF_CALLBACKS_STOP,
@@ -368,26 +398,34 @@ _CHECKED_FIELDS: Final = attrgetter(
     TS_DELETE_GARBAGE_START,
 )
 
-# Per set of checked fields present: the sub-phase rows a msgspec record
-# carries. A capture holds a handful of shapes, however many records.
-_SUB_PHASE_ROWS_BY_FIELDS: dict[tuple[bool, ...], tuple[type[PhaseRow], ...]] = {}
+# Per set of checked fields present: what a msgspec record carries. A
+# capture holds a handful of shapes, however many records.
+_BY_FIELDS: dict[tuple[bool, ...], _SubPhasesAndFields] = {}
 
 
-def sub_phase_rows(item: TGCStatsInfo) -> tuple[type[PhaseRow], ...]:
-    """The sub-phase rows whose `check` accepts *item*.
+def sub_phases(item: TGCStatsInfo) -> tuple[type[SubPhase], ...]:
+    """The sub-phases whose `check` accepts *item*."""
+    return sub_phases_and_fields(item)[0]
+
+
+def sub_phases_and_fields(item: TGCStatsInfo) -> _SubPhasesAndFields:
+    """The sub-phases, then the pause fields, whose `check` accepts *item*.
 
     A struct sequence's fields are fixed by its type, so the checks run on
     the first record of each type. A msgspec record holds `None` for a field
-    it lacks and its type says nothing about which, so its rows are cached
-    on which optional fields it holds.
+    it lacks and its type says nothing about which, so what it carries is
+    cached on which optional fields it holds.
     """
     if isinstance(item, tuple):
-        cache: dict[Any, tuple[type[PhaseRow], ...]] = _SUB_PHASE_ROWS
+        cache: dict[Any, _SubPhasesAndFields] = _BY_TYPE
         key: Any = type(item)
     else:
-        cache = _SUB_PHASE_ROWS_BY_FIELDS
+        cache = _BY_FIELDS
         key = tuple([value is None for value in _CHECKED_FIELDS(item)])
-    rows = cache.get(key)
-    if rows is None:
-        rows = cache[key] = tuple(row for row in SUB_PHASE_ROWS if row.check(item))
-    return rows
+    carried = cache.get(key)
+    if carried is None:
+        carried = cache[key] = (
+            tuple(phase for phase in SUB_PHASES if phase.check(item)),
+            tuple(field for field in PAUSE_FIELDS if field.check(item)),
+        )
+    return carried

@@ -20,11 +20,11 @@ from gcmon.model.names import (
     TS_CLEAR_WEAKREFS_STOP,
     TS_FINALIZE_GARBAGE_STOP,
     TS_HANDLE_RESURRECTED_STOP,
-    Phase,
+    PhaseName,
     gc_pause_slice_name,
     phase_slice_name,
 )
-from gcmon.model.phases import SUB_PHASE_ROWS
+from gcmon.model.phases import SUB_PHASES
 from gcmon.model.protocol import TItem
 from gcmon.model.trace_event import Counter, InterpreterTrack, LossTrack, ProcessTrack, Slice
 from tests.data_helpers import create_instant_msg
@@ -150,6 +150,26 @@ class TestTheSizesAPauseCarries:
         assert pause.args.keys() & {INCREMENT_SIZE, ALIVE_SIZE} == sizes
 
 
+class TestTheIncrementSize:
+    """`increment_size` has no span of its own. It annotates the pause, and
+    the `GC Fill Increment` slice carries only where it ran."""
+
+    def test_a_record_without_a_fill_increment_span_still_carries_it(self) -> None:
+        record = create_mock_stats_item(gen=0, increment_size=500)
+
+        events = convert_item_to_trace_format(proc(1), record)
+
+        slices = [e for e in events if isinstance(e, Slice)]
+        assert [e.name for e in slices] == [gc_pause_slice_name(0)]
+        assert slices[0].args[INCREMENT_SIZE] == 500
+
+    def test_the_fill_increment_slice_leaves_it_out(self) -> None:
+        events = convert_item_to_trace_format(proc(1), create_mock_incremental_item(gen=1))
+
+        fill = next(e for e in events if isinstance(e, Slice) and e.name == phase_slice_name(FILL_INCREMENT, 1))
+        assert INCREMENT_SIZE not in fill.args
+
+
 class TestAPhaseTheGenerationSkips:
     """Mark Alive does not run at generation 0, nor Fill Increment at 2. A
     record carrying a span for one there still draws no slice for it."""
@@ -158,7 +178,7 @@ class TestAPhaseTheGenerationSkips:
         ("gen_number", "phase"),
         [pytest.param(0, MARK_ALIVE, id="mark alive"), pytest.param(2, FILL_INCREMENT, id="fill increment")],
     )
-    def test_it_draws_no_slice(self, gen_number: int, phase: Phase) -> None:
+    def test_it_draws_no_slice(self, gen_number: int, phase: PhaseName) -> None:
         events = convert_item_to_trace_format(proc(1), create_mock_incremental_item(gen=gen_number))
 
         names = {e.name for e in events if isinstance(e, Slice)}
@@ -185,11 +205,11 @@ class TestAStructSequence:
 class TestAStructSequenceWithSubPhases:
     """A stock build's struct sequence carries no sub-phase, so the test
     above draws the pause alone. An instrumented build's carries them all,
-    and its rows are worked out once per type."""
+    and its sub-phases are worked out once per type."""
 
     def test_every_record_of_the_type_converts_like_its_msgspec_twin(self) -> None:
-        """One type across all three generations, so the rows cached on the
-        first record have to serve the two whose generation skips a phase."""
+        """One type across all three generations, so the sub-phases cached on
+        the first record have to serve the two whose generation skips a phase."""
         for gen_number in (1, 0, 2):
             record = create_mock_incremental_item(gen=gen_number)
 
@@ -204,7 +224,7 @@ class TestAStructSequenceWithSubPhases:
 
         slices = [e for e in convert_item_to_trace_format(proc(1), record) if isinstance(e, Slice)]
 
-        assert len(slices) == 1 + len(SUB_PHASE_ROWS)
+        assert len(slices) == 1 + len(SUB_PHASES)
 
 
 class TestAPhaseWhoseStartIsMissing:
