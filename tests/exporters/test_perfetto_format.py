@@ -461,28 +461,28 @@ class TestConvertItemToPerfettoPackets:
             return out
         raise AssertionError(f"slice {slice_name!r} not found in packets")
 
-    def test_finalize_garbage_substep_has_count_annotation(self, state: PerfettoTrackState) -> None:
+    def test_finalize_garbage_sub_phase_has_count_annotation(self, state: PerfettoTrackState) -> None:
         _, packets = convert_item(proc(TARGET_PID), full_subphase_item(), state, sequence_id=1)
 
         anns = self._annotations_for_slice(packets, phase_slice_name(FINALIZE_GARBAGE, 1))
         assert (FINALIZED_GARBAGE_COUNT, 42) in anns
         assert all(name not in (DELETED_GARBAGE_COUNT, CLEAR_WEAKREFS_COUNT) for name, _ in anns)
 
-    def test_clear_weakrefs_substep_has_count_annotation(self, state: PerfettoTrackState) -> None:
+    def test_clear_weakrefs_sub_phase_has_count_annotation(self, state: PerfettoTrackState) -> None:
         _, packets = convert_item(proc(TARGET_PID), full_subphase_item(), state, sequence_id=1)
 
         anns = self._annotations_for_slice(packets, phase_slice_name(CLEAR_WEAKREFS, 1))
         assert (CLEAR_WEAKREFS_COUNT, 7) in anns
         assert all(name not in (FINALIZED_GARBAGE_COUNT, DELETED_GARBAGE_COUNT) for name, _ in anns)
 
-    def test_delete_garbage_substep_has_count_annotation(self, state: PerfettoTrackState) -> None:
+    def test_delete_garbage_sub_phase_has_count_annotation(self, state: PerfettoTrackState) -> None:
         _, packets = convert_item(proc(TARGET_PID), full_subphase_item(), state, sequence_id=1)
 
         anns = self._annotations_for_slice(packets, phase_slice_name(DELETE_GARBAGE, 1))
         assert (DELETED_GARBAGE_COUNT, 13) in anns
         assert all(name not in (FINALIZED_GARBAGE_COUNT, CLEAR_WEAKREFS_COUNT) for name, _ in anns)
 
-    def test_deduce_unreachable_substep_has_candidates_annotation(self, state: PerfettoTrackState) -> None:
+    def test_deduce_unreachable_sub_phase_has_candidates_annotation(self, state: PerfettoTrackState) -> None:
         item = full_subphase_item()
 
         _, packets = convert_item(proc(TARGET_PID), item, state, sequence_id=1)
@@ -985,14 +985,14 @@ class TestTheRowsInsideAnInterpreterGroupAreRanked:
 
 class TestTheCountersInsideAMetricsGroupAreRanked:
     """The counters a `GC Metrics` group holds draw in the order
-    ``_COUNTER_ORDER`` sets.
+    `PauseData.counter_metrics` sets.
 
     The order is spelled out below rather than read off that tuple, which
     would pass whatever it said. Which metric draws where is the record's
     decision (ADR-0027), so reordering the tuple costs an edit here too.
     """
 
-    def test_they_draw_collected_uncollectable_candidates_then_duration(
+    def test_they_draw_collected_candidates_duration_then_uncollectable(
         self,
         state: PerfettoTrackState,
     ) -> None:
@@ -1006,7 +1006,7 @@ class TestTheCountersInsideAMetricsGroupAreRanked:
         group_uuid = state.get_or_create_counter_group_track_uuid(interpreter_track(TARGET_PID, 0))
         rows = sorted((td for td in parsed if td.parent_uuid == group_uuid), key=lambda td: td.sibling_order_rank)
         assert [td.name for td in rows] == [
-            counter_display_name(0, metric) for metric in (COLLECTED, UNCOLLECTABLE, CANDIDATES, DURATION)
+            counter_display_name(0, metric) for metric in (COLLECTED, CANDIDATES, DURATION, UNCOLLECTABLE)
         ]
         assert [td.sibling_order_rank for td in rows] == [0, 1, 2, 3], "ranks must be distinct for the order to hold"
 
