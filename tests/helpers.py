@@ -14,7 +14,6 @@ from perfetto.protos.perfetto.trace.perfetto_trace_pb2 import Trace, TracePacket
 from perfetto.trace_processor import TraceProcessor, TraceProcessorConfig
 
 from gcmon.exporters.exporter import EventsExporter
-from gcmon.exporters.trace_converter import counter_display_name
 from gcmon.model.data import GCStatsInfo, GenLoss, LossMsg
 from gcmon.model.names import (
     ALIVE_SIZE,
@@ -47,6 +46,7 @@ from gcmon.model.names import (
     TS_STOP,
     TYPE,
     UNCOLLECTABLE,
+    counter_display_name,
 )
 from gcmon.model.process import Process
 from gcmon.model.protocol import TGCStatsInfo, TInstantMsg, TLossMsg
@@ -430,6 +430,32 @@ def as_structseq(record: GCStatsInfo) -> TGCStatsInfo:
     every sub-phase."""
     fields = msgspec.structs.asdict(record)
     structseq: TGCStatsInfo = _STRUCTSEQ_GC_STATS([fields[name] for name in _STRUCTSEQ_GC_STATS.__match_args__])
+    return structseq
+
+
+class _InstrumentedGCStatsInfo(tuple[Any, ...]):
+    """An instrumented build's struct sequence, which reports every
+    sub-phase: a tuple whose `__match_args__` name its fields and whose
+    attributes read them, which is all gcmon reads of one."""
+
+    __match_args__ = GCStatsInfo.__struct_fields__
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self[self.__match_args__.index(name)]
+        except ValueError:
+            raise AttributeError(name) from None
+
+
+# Reached through `Any`, like `_STRUCTSEQ_GC_STATS`: its attributes come from
+# `__getattr__`, which no checker matches against `TGCStatsInfo`.
+_INSTRUMENTED_GC_STATS: Any = _InstrumentedGCStatsInfo
+
+
+def as_instrumented_structseq(record: GCStatsInfo) -> TGCStatsInfo:
+    """*record* as an instrumented build's monitor reads it: every field it
+    has, sub-phases included, in a struct sequence."""
+    structseq: TGCStatsInfo = _INSTRUMENTED_GC_STATS(msgspec.structs.astuple(record))
     return structseq
 
 
