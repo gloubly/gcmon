@@ -81,8 +81,8 @@ which point one shared path is worth more than the encoder's independence.
 - The two timestamp normalizers. `combine._normalize_trace_timestamps` works
   on `TraceEvent` and `jsonl_io.normalize_jsonl_timestamps` on records; they
   exist because there are two representations, not because of this
-  duplication. [0035](0035-derive-every-gc-sub-phase-from-one-table.md) turns
-  the second into a table walk, which is most of the cost of the second one.
+  duplication. The second walks every `ts_` field of `GCStatsInfo` rather than
+  listing the sub-phases.
 
 ## 7. Further notes
 
