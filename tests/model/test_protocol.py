@@ -7,6 +7,7 @@ from gcmon.control.protocol import START_EVENT
 from gcmon.model.data import GCStatsInfo, GenLoss, InstantMsg, LossMsg
 from gcmon.model.names import (
     ALIVE_SIZE,
+    AUTO_COLLECT,
     CANDIDATES,
     CLEAR_WEAKREFS_COUNT,
     COLLECTED,
@@ -24,6 +25,7 @@ from gcmon.model.names import (
     LOST_PAUSE_NS,
     NAME,
     OBSERVED_COUNT,
+    OLD_WORK,
     TS,
     TS_CLEAR_WEAKREFS_STOP,
     TS_DEDUCE_UNREACHABLE_START,
@@ -53,6 +55,8 @@ from gcmon.model.phases import (
     HandleWeakrefsSubPhase,
     IncrementSizeField,
     MarkAliveSubPhase,
+    NewIncrementalFields,
+    OldWorkField,
     PauseField,
     PausePhase,
     SubPhase,
@@ -110,6 +114,8 @@ class TestChecks:
 
     CHECKS = (
         (IncrementSizeField, {INCREMENT_SIZE: 500}),
+        (OldWorkField, {OLD_WORK: 500}),
+        (NewIncrementalFields, {AUTO_COLLECT: 1}),
         (FillIncrementSubPhase, {TS_FILL_INCREMENT_START: 100}),
         (MarkAliveSubPhase, {ALIVE_SIZE: 300}),
         (DeduceUnreachableSubPhase, {TS_DEDUCE_UNREACHABLE_START: 100}),

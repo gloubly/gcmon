@@ -14,7 +14,11 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Final, NamedTuple
 
 __all__ = [
+    "AGING_NEXT",
+    "AGING_SPACES",
+    "AGING_THRESHOLD",
     "ALIVE_SIZE",
+    "AUTO_COLLECT",
     "CANDIDATES",
     "CLEAR_WEAKREFS",
     "CLEAR_WEAKREFS_COUNT",
@@ -48,11 +52,13 @@ __all__ = [
     "MARK_ALIVE",
     "NAME",
     "OBSERVED_COUNT",
+    "OLD_WORK",
     "PAUSE",
     "PID",
     "PID_EPOCH",
     "RSS",
     "SAMPLED_COUNT",
+    "SURVIVOR_COUNT",
     "TS",
     "TS_CLEAR_WEAKREFS_STOP",
     "TS_DEDUCE_UNREACHABLE_START",
@@ -170,6 +176,12 @@ ALIVE_SIZE: Final = "alive_size"
 FINALIZED_GARBAGE_COUNT: Final = "finalized_garbage_count"
 DELETED_GARBAGE_COUNT: Final = "deleted_garbage_count"
 CLEAR_WEAKREFS_COUNT: Final = "clear_weakrefs_count"
+OLD_WORK: Final = "old_work"
+AUTO_COLLECT: Final = "auto_collect"
+SURVIVOR_COUNT: Final = "survivor_count"
+AGING_THRESHOLD: Final = "aging_threshold"
+AGING_SPACES: Final = "aging_spaces"
+AGING_NEXT: Final = "aging_next"
 
 
 def counter_display_name(gen: int, metric: str) -> str:
