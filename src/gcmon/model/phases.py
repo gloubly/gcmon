@@ -40,12 +40,14 @@ __all__ = [
     "PHASES",
     "SUB_PHASES",
     "ClearWeakrefsSubPhase",
+    "Counters",
     "DeduceUnreachableSubPhase",
     "DeleteGarbageSubPhase",
     "FillIncrementSubPhase",
     "FinalizeGarbageSubPhase",
     "HandleResurrectedSubPhase",
     "HandleWeakrefsSubPhase",
+    "HeapSizeStopField",
     "IncrementSizeField",
     "MarkAliveSubPhase",
     "NewIncrementalFields",
@@ -100,11 +102,6 @@ class PausePhase:
 
     name: ClassVar[PhaseName] = PAUSE
 
-    counter_metrics: ClassVar = (COLLECTED, CANDIDATES, DURATION, UNCOLLECTABLE)
-    counter_names: ClassVar[Mapping[str, PerGeneration[str]]] = {
-        metric: PerGeneration(partial(counter_display_name, metric=metric)) for metric in counter_metrics
-    }
-
     @staticmethod
     def check(item: object) -> TypeGuard[Info]:
         # A loss record carries `ts_start` too, and it is no GC record.
@@ -126,19 +123,6 @@ class PausePhase:
             HEAP_SIZE: item.heap_size,
             DURATION: item.duration,
         }
-
-    @classmethod
-    def counters(cls, gen: int, item: Info) -> list[tuple[str, str, int | float]]:
-        names = cls.counter_names
-        counters: list[tuple[str, str, int | float]] = [
-            (COLLECTED, names[COLLECTED][gen], item.collected),
-            (CANDIDATES, names[CANDIDATES][gen], item.candidates),
-            (DURATION, names[DURATION][gen], item.duration),
-        ]
-        if item.uncollectable:
-            counters.append((UNCOLLECTABLE, names[UNCOLLECTABLE][gen], item.uncollectable))
-        counters.append((HEAP_SIZE, HEAP_SIZE, item.heap_size))
-        return counters
 
 
 class MarkAliveSubPhase:
@@ -424,6 +408,52 @@ class NewIncrementalFields:
         }
 
 
+class HeapSizeStopField:
+    HEAP_SIZE_STOP: Final = "heap_size_stop"
+
+    class _Info(Protocol):
+        heap_size_stop: int
+
+    Info: ClassVar[type] = _Info
+
+    @staticmethod
+    def check(item: object) -> TypeGuard[_Info]:
+        return getattr(item, HeapSizeStopField.HEAP_SIZE_STOP, None) is not None
+
+    @staticmethod
+    def args(gen: int, item: _Info) -> EventArgs:
+        return {HeapSizeStopField.HEAP_SIZE_STOP: item.heap_size_stop}
+
+
+class Counters:
+    """The counters one pause draws: per generation, then the heap size as
+    it starts and stops."""
+
+    counter_metrics: ClassVar = (COLLECTED, CANDIDATES, DURATION, UNCOLLECTABLE)
+    counter_names: ClassVar[Mapping[str, PerGeneration[str]]] = {
+        metric: PerGeneration(partial(counter_display_name, metric=metric)) for metric in counter_metrics
+    }
+
+    @classmethod
+    def counters(
+        cls, gen: int, ts_start: int, ts_stop: int, item: TGCStatsInfo
+    ) -> list[tuple[str, str, int, int | float]]:
+        names = cls.counter_names
+        counters: list[tuple[str, str, int, int | float]] = [
+            (COLLECTED, names[COLLECTED][gen], ts_start, item.collected),
+            (CANDIDATES, names[CANDIDATES][gen], ts_start, item.candidates),
+            (DURATION, names[DURATION][gen], ts_start, item.duration),
+        ]
+        if item.uncollectable:
+            counters.append((UNCOLLECTABLE, names[UNCOLLECTABLE][gen], ts_start, item.uncollectable))
+        counters.append((HEAP_SIZE, HEAP_SIZE, ts_start, item.heap_size))
+
+        if HeapSizeStopField.check(item):
+            counters.append((HEAP_SIZE, HEAP_SIZE, ts_stop, item.heap_size_stop))
+
+        return counters
+
+
 # In the order the collector runs them, which is the order they are drawn in.
 SUB_PHASES: Final[tuple[type[SubPhase], ...]] = (
     MarkAliveSubPhase,
@@ -443,6 +473,7 @@ PAUSE_FIELDS: Final[tuple[type[PauseField], ...]] = (
     IncrementSizeField,
     OldWorkField,
     NewIncrementalFields,
+    HeapSizeStopField,
 )
 
 type _SubPhasesAndFields = tuple[tuple[type[SubPhase], ...], tuple[type[PauseField], ...]]
@@ -466,6 +497,7 @@ _CHECKED_FIELDS: Final = attrgetter(
     DeleteGarbageSubPhase.TS_DELETE_GARBAGE_START,
     OldWorkField.OLD_WORK,
     NewIncrementalFields.AUTO_COLLECT,
+    HeapSizeStopField.HEAP_SIZE_STOP,
 )
 
 # Per set of checked fields present: what a msgspec record carries. A
