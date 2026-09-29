@@ -16,13 +16,13 @@ VERSION_HEADER_RE = re.compile(r"^## Version (?P<version>\S+)", re.MULTILINE)
 
 
 def resolve_version(tag: str | None) -> str:
-    if tag and tag.startswith("v"):
-        return tag[1:]
+    if tag and (match := re.search(r"\d+\.\d+\.[0-9a-zA-Z]+$", tag)):
+        return match.group()
     elif tag == "latest":
         with PYPROJECT_PATH.open("rb") as f:
             version: str = tomllib.load(f)["tool"]["poetry"]["version"]
         return version
-    return None
+    return ""
 
 
 def extract(version: str) -> str:

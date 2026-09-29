@@ -63,10 +63,10 @@ class TestResolveVersion:
         assert extract_changelog.resolve_version("v0.2.0a1") == "0.2.0a1"
 
     def test_none_when_tag_missing(self, fake_pyproject: Path) -> None:
-        assert extract_changelog.resolve_version(None) is None
+        assert not extract_changelog.resolve_version(None)
 
     def test_none_when_tag_lacks_v_prefix(self, fake_pyproject: Path) -> None:
-        assert extract_changelog.resolve_version("refs/heads/main") is None
+        assert not extract_changelog.resolve_version("refs/heads/main")
 
     def test_falls_back_to_pyproject_when_tag_is_latest(self, fake_pyproject: Path) -> None:
         assert extract_changelog.resolve_version("latest") == "0.2.0"
