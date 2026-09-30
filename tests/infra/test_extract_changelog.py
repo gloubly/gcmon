@@ -62,14 +62,26 @@ class TestResolveVersion:
     def test_keeps_pep440_suffix(self) -> None:
         assert extract_changelog.resolve_version("v0.2.0a1") == "0.2.0a1"
 
-    def test_none_when_tag_missing(self, fake_pyproject: Path) -> None:
-        assert not extract_changelog.resolve_version(None)
+    def test_wip_when_tag_missing(self, fake_pyproject: Path) -> None:
+        assert extract_changelog.resolve_version(None) == "WIP"
 
-    def test_none_when_tag_lacks_v_prefix(self, fake_pyproject: Path) -> None:
+    def test_empty_string_when_tag_is_git_ref(self, fake_pyproject: Path) -> None:
         assert not extract_changelog.resolve_version("refs/heads/main")
 
     def test_falls_back_to_pyproject_when_tag_is_latest(self, fake_pyproject: Path) -> None:
         assert extract_changelog.resolve_version("latest") == "0.2.0"
+
+    def test_empty_string_when_incomplete_tag(self, fake_pyproject: Path) -> None:
+        assert not extract_changelog.resolve_version("v0.6")
+
+    def test_empty_string_when_dash_in_tag(self, fake_pyproject: Path) -> None:
+        assert not extract_changelog.resolve_version("v0.6.0-rc1")
+
+    def test_empty_string_when_tag_not_start_with_v_prefix_or_number(self, fake_pyproject: Path) -> None:
+        assert not extract_changelog.resolve_version("release-0.6.0")
+
+    def test_dev_tag_version(self, fake_pyproject: Path) -> None:
+        assert extract_changelog.resolve_version("v0.2.0.dev1") == "0.2.0.dev1"
 
 
 class TestExtract:
